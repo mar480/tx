@@ -204,7 +204,7 @@ if check:
 if next_q:
     new_question()
     # After new_question() we don't show old feedback, so early-exit draw:
-    st.experimental_rerun()
+
 
 # ---------- Feedback ----------
 
