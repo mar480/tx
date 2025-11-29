@@ -6,7 +6,7 @@ import pandas as pd
 # ---------- Data loading ----------
 
 @st.cache_data
-def load_questions(path: str = r"C:\Users\r.marks\OneDrive - Financial Reporting Council\Desktop\tx\better quiz.csv") -> pd.DataFrame:
+def load_questions(path: str = "better quiz.csv"r) -> pd.DataFrame:
     """
     Load the simple quiz CSV with columns: Topic, Question, Answer.
     Normalise into: id, topic, question, answer.
