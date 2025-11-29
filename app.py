@@ -9,7 +9,7 @@ import pandas as pd
 def load_questions(path: str = "better quiz.csv") -> pd.DataFrame:
     """
     Load the simple quiz CSV with columns: Topic, Question, Answer.
-    Normalise into: id, topic, question, answer.
+    Normalize into: id, topic, question, answer.
     """
     df = pd.read_csv(path, encoding="utf-8-sig")
 
@@ -49,6 +49,7 @@ if df_all.empty:
     st.error("No questions found in the CSV file.")
     st.stop()
 
+
 # ---------- Sidebar: topic filters ----------
 
 st.sidebar.title("Filters")
@@ -79,7 +80,7 @@ def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame):
     """
     Pick one random question and build options:
     - correct = its own Answer
-    - distractor = one other Answer, ideally same topic, else from whole bank
+    - distractor = one other Answer, ideally same topic, else from whole bank.
     Ensures distractor text is not the same as the correct answer (after normalisation).
     """
 
@@ -100,7 +101,6 @@ def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame):
     same_topic = df_all[(df_all["topic"] == topic) & (df_all["id"] != qid)]
     candidates = same_topic["answer"].dropna().unique().tolist()
 
-    # Filter out empties and anything equal to the correct answer (after normalisation)
     filtered = []
     for c in candidates:
         c_str = str(c).strip()
@@ -133,12 +133,11 @@ def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame):
 
     return {
         "id": qid,
-            "topic": topic,
-            "question": question_text,
-            "correct": correct,
-            "options": options,
+        "topic": topic,
+        "question": question_text,
+        "correct": correct,
+        "options": options,
     }
-
 
 
 # ---------- Minimal session state ----------
@@ -154,7 +153,7 @@ if "feedback" not in ss:
 
 
 def reset_radio():
-    # Clear previous selection so the radio doesn't try to reuse an option list
+    # Clear previous selection so the radio doesn't try to reuse an old value
     if "answer_radio" in ss:
         del ss["answer_radio"]
 
@@ -172,32 +171,36 @@ if ss.current_q is None or ss.current_q["id"] not in df_pool["id"].values:
 
 q = ss.current_q
 
+
 # ---------- Main UI ----------
 
 st.title("TX Drill – Either/Or Mode")
 
-# Controls
-col_top_a, col_top_b = st.columns([1, 1])
-with col_top_a:
-    if st.button("Next question"):
-        new_question()
-        # After this button click, Streamlit reruns; we'll use the new ss.current_q
+# --- Next question button (handled FIRST, then we stop this run) ---
+if st.button("Next question"):
+    new_question()
+    # Stop here so we don't process Check-answer logic in the same pass
+    st.stop()
 
 st.markdown("---")
 
-# Show current question
-if q["topic"]:
-    st.markdown(f"**{q['topic']}**")
+# --- Question + answer form ---
+with st.form("qa_form"):
+    if q["topic"]:
+        st.markdown(f"**{q['topic']}**")
 
-st.markdown(f"### {q['question']}")
+    st.markdown(f"### {q['question']}")
 
-selected = st.radio(
-    "Select your answer:",
-    q["options"],
-    key="answer_radio",
-)
+    selected = st.radio(
+        "Select your answer:",
+        q["options"],
+        key="answer_radio",
+    )
 
-if st.button("Check answer"):
+    check = st.form_submit_button("Check answer")
+
+# Handle check after the form is submitted
+if check:
     if selected == q["correct"]:
         ss.feedback = "correct"
     else:
@@ -209,7 +212,6 @@ if ss.feedback == "correct":
     st.success("✅ Correct!")
 elif ss.feedback == "incorrect":
     st.error("❌ Incorrect.")
-
     with st.expander("See the correct answer"):
         st.markdown(f"**Correct answer:**  \n{q['correct']}")
 else:
