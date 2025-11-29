@@ -13,7 +13,7 @@ def load_questions(path: str = "better quiz.csv") -> pd.DataFrame:
     """
     df = pd.read_csv(path, encoding="utf-8-sig")
 
-    # Normalise column names
+    # Normalise column names (robust to minor header differences)
     rename_map = {}
     for col in df.columns:
         cl = col.lower().strip()
@@ -76,7 +76,7 @@ st.sidebar.write("Each question: correct vs one distractor (either/or).")
 
 # ---------- Helper to build a single question ----------
 
-def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame):
+def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame) -> dict:
     """
     Pick one random question and build options:
     - correct = its own Answer
@@ -144,12 +144,10 @@ def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame):
 
 ss = st.session_state
 
-# current_q: dict with id/topic/question/correct/options
 if "current_q" not in ss:
-    ss.current_q = None
-# feedback: None / "correct" / "incorrect"
+    ss.current_q = None  # dict with id/topic/question/correct/options
 if "feedback" not in ss:
-    ss.feedback = None
+    ss.feedback = None   # None / "correct" / "incorrect"
 
 
 def reset_radio():
@@ -169,18 +167,16 @@ def new_question():
 if ss.current_q is None or ss.current_q["id"] not in df_pool["id"].values:
     new_question()
 
-q = ss.current_q
-
-
 # ---------- Main UI ----------
 
 st.title("TX Drill – Either/Or Mode")
 
-# --- Next question button (handled FIRST, then we stop this run) ---
+# Handle "Next question" FIRST, but do NOT stop the script
 if st.button("Next question"):
     new_question()
-    # Stop here so we don't process Check-answer logic in the same pass
-    st.stop()
+
+# Now, after any potential update, get the current question to display
+q = ss.current_q
 
 st.markdown("---")
 
