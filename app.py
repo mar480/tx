@@ -16,11 +16,12 @@ def load_questions(path: str = "better quiz.csv") -> pd.DataFrame:
     # Normalise column names
     rename_map = {}
     for col in df.columns:
-        if col.lower() == "topic":
+        cl = col.lower().strip()
+        if cl == "topic":
             rename_map[col] = "topic"
-        elif col.lower() == "question":
+        elif cl == "question":
             rename_map[col] = "question"
-        elif col.lower() == "answer":
+        elif cl == "answer":
             rename_map[col] = "answer"
     df = df.rename(columns=rename_map)
 
@@ -48,7 +49,7 @@ if df_all.empty:
     st.error("No questions found in the CSV file.")
     st.stop()
 
-# ---------- Sidebar: filters ----------
+# ---------- Sidebar: topic filters ----------
 
 st.sidebar.title("Filters")
 
@@ -60,7 +61,7 @@ topic_choice = st.sidebar.multiselect(
 )
 
 if topic_choice:
-    df_pool = df_all[df_all["topic"].isin(topic_choice)]
+    df_pool = df_all[df_all["topic"].isin(topic_choice)].copy()
 else:
     df_pool = df_all.copy()
 
@@ -69,161 +70,147 @@ if df_pool.empty:
     st.stop()
 
 st.sidebar.markdown("---")
-st.sidebar.write("This mode always gives you two options: correct vs one distractor.")
+st.sidebar.write("Each question: correct vs one distractor (either/or).")
 
 
-# ---------- Question generation ----------
+# ---------- Helper to build a single question ----------
 
-def make_question(df_pool: pd.DataFrame, df_all: pd.DataFrame):
+def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame):
     """
     Pick one random question and build options:
     - correct = its own Answer
     - distractor = one other Answer, ideally same topic, else from whole bank
+    Ensures distractor text is not the same as the correct answer (after normalisation).
     """
+
+    def norm(s: str) -> str:
+        # Normalise for comparison: strip, collapse whitespace, lowercase
+        s = (s or "").strip()
+        return " ".join(s.split()).lower()
+
     row = df_pool.sample(1).iloc[0]
 
     qid = row["id"]
     topic = row["topic"]
     question_text = row["question"]
     correct = row["answer"]
+    correct_norm = norm(correct)
 
-    # Try to get distractors from same topic
+    # --- Candidates from same topic ---
     same_topic = df_all[(df_all["topic"] == topic) & (df_all["id"] != qid)]
     candidates = same_topic["answer"].dropna().unique().tolist()
-    candidates = [c for c in candidates if c.strip() and c.strip() != correct.strip()]
 
-    # If none, fall back to any other answer in the bank
-    if not candidates:
-        other = df_all[df_all["id"] != qid]["answer"].dropna().unique().tolist()
-        candidates = [c for c in other if c.strip() and c.strip() != correct.strip()]
+    # Filter out empties and anything equal to the correct answer (after normalisation)
+    filtered = []
+    for c in candidates:
+        c_str = str(c).strip()
+        if not c_str:
+            continue
+        if norm(c_str) == correct_norm:
+            continue
+        filtered.append(c_str)
 
-    if not candidates:
-        # Degenerate case: only one question in entire bank
+    # --- If none, fall back to anywhere in the bank ---
+    if not filtered:
+        others = df_all[df_all["id"] != qid]["answer"].dropna().unique().tolist()
+        for c in others:
+            c_str = str(c).strip()
+            if not c_str:
+                continue
+            if norm(c_str) == correct_norm:
+                continue
+            filtered.append(c_str)
+
+    # Final choice
+    if not filtered:
+        # Degenerate case: literally no distinct answer text exists
         distractor = "No distractor available"
     else:
-        distractor = random.choice(candidates)
+        distractor = random.choice(filtered)
 
     options = [correct, distractor]
     random.shuffle(options)
 
     return {
         "id": qid,
-        "topic": topic,
-        "question": question_text,
-        "correct": correct,
-        "options": options,
+            "topic": topic,
+            "question": question_text,
+            "correct": correct,
+            "options": options,
     }
 
 
-# ---------- Session state ----------
+
+# ---------- Minimal session state ----------
 
 ss = st.session_state
 
+# current_q: dict with id/topic/question/correct/options
 if "current_q" not in ss:
     ss.current_q = None
-if "score" not in ss:
-    ss.score = 0
-if "questions_seen" not in ss:
-    ss.questions_seen = 0
-if "last_checked" not in ss:
-    ss.last_checked = False
-if "last_correct" not in ss:
-    ss.last_correct = None
-if "last_checked_qid" not in ss:
-    ss.last_checked_qid = None
+# feedback: None / "correct" / "incorrect"
+if "feedback" not in ss:
+    ss.feedback = None
 
 
-def new_question():
-    ss.current_q = make_question(df_pool, df_all)
-    ss.last_checked = False
-    ss.last_correct = None
-    ss.last_checked_qid = None
+def reset_radio():
+    # Clear previous selection so the radio doesn't try to reuse an option list
     if "answer_radio" in ss:
         del ss["answer_radio"]
 
 
-def record_answer(selected_option: str):
-    """Mark the current question as answered, update score once per question."""
-    q = ss.current_q
-    if q is None:
-        return
-
-    already_marked = ss.last_checked and (ss.last_checked_qid == q["id"])
-    is_corr = selected_option == q["correct"]
-
-    ss.last_checked = True
-    ss.last_correct = is_corr
-    ss.last_checked_qid = q["id"]
-
-    if not already_marked:
-        ss.questions_seen += 1
-        if is_corr:
-            ss.score += 1
+def new_question():
+    ss.current_q = generate_question(df_pool, df_all)
+    ss.feedback = None
+    reset_radio()
 
 
-if ss.current_q is None:
+# Initialise a question, or refresh it if filters changed so that
+# the current question is no longer in the pool.
+if ss.current_q is None or ss.current_q["id"] not in df_pool["id"].values:
     new_question()
-
-
-# ---------- Main UI ----------
-
-st.title("TX Drill App – Either/Or Practice")
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("Questions seen", ss.questions_seen)
-with col2:
-    st.metric("Correct", ss.score)
-with col3:
-    acc = f"{(ss.score / ss.questions_seen * 100):.1f}%" if ss.questions_seen > 0 else "—"
-    st.metric("Accuracy", acc)
-
-st.markdown("---")
 
 q = ss.current_q
 
-with st.form("qa_form"):
-    # Meta: topic line
-    if q["topic"]:
-        st.markdown(f"**{q['topic']}**")
+# ---------- Main UI ----------
 
-    st.markdown(f"### {q['question']}")
+st.title("TX Drill – Either/Or Mode")
 
-    selected = st.radio(
-        "Select your answer:",
-        q["options"],
-        key="answer_radio",
-    )
+# Controls
+col_top_a, col_top_b = st.columns([1, 1])
+with col_top_a:
+    if st.button("Next question"):
+        new_question()
+        # After this button click, Streamlit reruns; we'll use the new ss.current_q
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        check = st.form_submit_button("Check answer")
-    with col_b:
-        next_q = st.form_submit_button("Next question")
+st.markdown("---")
 
-# Handle form actions
-if check:
-    record_answer(selected)
+# Show current question
+if q["topic"]:
+    st.markdown(f"**{q['topic']}**")
 
-if next_q:
-    new_question()
+st.markdown(f"### {q['question']}")
+
+selected = st.radio(
+    "Select your answer:",
+    q["options"],
+    key="answer_radio",
+)
+
+if st.button("Check answer"):
+    if selected == q["correct"]:
+        ss.feedback = "correct"
+    else:
+        ss.feedback = "incorrect"
 
 # ---------- Feedback ----------
 
-if ss.last_checked and ss.current_q["id"] == ss.last_checked_qid:
-    if ss.last_correct:
-        st.success("✅ Correct!")
-    else:
-        st.error("❌ Incorrect.")
+if ss.feedback == "correct":
+    st.success("✅ Correct!")
+elif ss.feedback == "incorrect":
+    st.error("❌ Incorrect.")
 
-    with st.expander("Show correct answer text", expanded=True):
+    with st.expander("See the correct answer"):
         st.markdown(f"**Correct answer:**  \n{q['correct']}")
-
-    with st.expander("See both options you were choosing between"):
-        for opt in q["options"]:
-            if opt == q["correct"]:
-                st.markdown(f"- **✅ {opt}**")
-            else:
-                st.markdown(f"- {opt}")
 else:
     st.info("Pick one of the two options and click **Check answer**.")
