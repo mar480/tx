@@ -80,7 +80,13 @@ def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame) -> dict:
     """
     Pick one random question and build options:
     - correct = its own Answer
-    - distractor = one other Answer, ideally same topic, else from whole bank.
+    - distractor = one other Answer.
+
+    For residency questions (Topic starts with 'Residency rules'):
+      - distractor comes from a *different* residency rules topic.
+    For everything else:
+      - distractor comes from the same topic (fallback to whole bank if needed).
+
     Ensures distractor text is not the same as the correct answer (after normalisation).
     """
 
@@ -97,10 +103,31 @@ def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame) -> dict:
     correct = row["answer"]
     correct_norm = norm(correct)
 
-    # --- Candidates from same topic ---
-    same_topic = df_all[(df_all["topic"] == topic) & (df_all["id"] != qid)]
-    candidates = same_topic["answer"].dropna().unique().tolist()
+    # --- Choose candidate distractors depending on topic type ---
 
+    topic_str = str(topic)
+    topic_lower = topic_str.lower()
+
+    if topic_lower.startswith("residency rules"):
+        # All residency rows
+        residency_mask = df_all["topic"].str.lower().str.startswith("residency rules")
+
+        # Candidates = other residency topics (different from current topic)
+        candidate_rows = df_all[
+            residency_mask
+            & (df_all["topic"] != topic_str)
+            & (df_all["id"] != qid)
+        ]
+    else:
+        # Default behaviour: same topic
+        candidate_rows = df_all[
+            (df_all["topic"] == topic_str)
+            & (df_all["id"] != qid)
+        ]
+
+    candidates = candidate_rows["answer"].dropna().unique().tolist()
+
+    # Filter out empties and anything equal to the correct answer (after normalisation)
     filtered = []
     for c in candidates:
         c_str = str(c).strip()
@@ -123,7 +150,6 @@ def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame) -> dict:
 
     # Final choice
     if not filtered:
-        # Degenerate case: literally no distinct answer text exists
         distractor = "No distractor available"
     else:
         distractor = random.choice(filtered)
@@ -133,7 +159,7 @@ def generate_question(df_pool: pd.DataFrame, df_all: pd.DataFrame) -> dict:
 
     return {
         "id": qid,
-        "topic": topic,
+        "topic": topic_str,
         "question": question_text,
         "correct": correct,
         "options": options,
