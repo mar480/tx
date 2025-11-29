@@ -6,102 +6,111 @@ import pandas as pd
 # ---------- Data loading ----------
 
 @st.cache_data
-def load_questions(path: str = "questions.csv") -> pd.DataFrame:
+def load_questions(path: str = r"C:\Users\r.marks\OneDrive - Financial Reporting Council\Desktop\tx\better quiz.csv") -> pd.DataFrame:
+    """
+    Load the simple quiz CSV with columns: Topic, Question, Answer.
+    Normalise into: id, topic, question, answer.
+    """
     df = pd.read_csv(path, encoding="utf-8-sig")
-    for col in ["sheet", "topic", "subject", "question", "answer"]:
-        if col in df.columns:
-            df[col] = df[col].fillna("").astype(str).str.strip()
+
+    # Normalise column names
+    rename_map = {}
+    for col in df.columns:
+        if col.lower() == "topic":
+            rename_map[col] = "topic"
+        elif col.lower() == "question":
+            rename_map[col] = "question"
+        elif col.lower() == "answer":
+            rename_map[col] = "answer"
+    df = df.rename(columns=rename_map)
+
+    # Ensure required columns exist
+    for col in ["topic", "question", "answer"]:
+        if col not in df.columns:
+            df[col] = ""
+
+    # Clean text
+    for col in ["topic", "question", "answer"]:
+        df[col] = df[col].fillna("").astype(str).str.strip()
+
+    # Drop completely empty rows
+    df = df[(df["question"] != "") & (df["answer"] != "")].reset_index(drop=True)
+
+    # Auto-generate ids
+    df["id"] = [f"Q-{i+1}" for i in range(len(df))]
+
     return df
 
 
 df_all = load_questions()
 
 if df_all.empty:
-    st.error("No questions found in questions.csv")
+    st.error("No questions found in the CSV file.")
     st.stop()
 
-# ---------- Sidebar: filters & settings ----------
+# ---------- Sidebar: filters ----------
 
 st.sidebar.title("Filters")
 
-sheets = sorted(df_all["sheet"].unique())
-sheet_choice = st.sidebar.selectbox(
-    "Sheet",
-    options=["All"] + sheets,
-    index=0,
-)
-
-if sheet_choice == "All":
-    df_sheet = df_all.copy()
-else:
-    df_sheet = df_all[df_all["sheet"] == sheet_choice]
-
-topics = sorted([t for t in df_sheet["topic"].unique() if t])
+topics = sorted([t for t in df_all["topic"].unique() if t])
 topic_choice = st.sidebar.multiselect(
     "Topics",
     options=topics,
-    default=topics,
+    default=topics,  # default: all topics
 )
-
-num_options = st.sidebar.slider(
-    "Number of answer options",
-    min_value=2,
-    max_value=6,
-    value=4,
-    step=1,
-)
-
-st.sidebar.markdown("---")
-st.sidebar.write("Tip: narrow the sheet/topic to get better distractors.")
 
 if topic_choice:
-    df_pool = df_sheet[df_sheet["topic"].isin(topic_choice)]
+    df_pool = df_all[df_all["topic"].isin(topic_choice)]
 else:
-    df_pool = df_sheet.copy()
+    df_pool = df_all.copy()
 
 if df_pool.empty:
     st.error("No questions match the current filters.")
     st.stop()
 
+st.sidebar.markdown("---")
+st.sidebar.write("This mode always gives you two options: correct vs one distractor.")
+
+
 # ---------- Question generation ----------
 
-def make_question(df_pool: pd.DataFrame, df_all: pd.DataFrame, num_options: int):
-    """Pick one random question and a list of answer options (correct + distractors)."""
+def make_question(df_pool: pd.DataFrame, df_all: pd.DataFrame):
+    """
+    Pick one random question and build options:
+    - correct = its own Answer
+    - distractor = one other Answer, ideally same topic, else from whole bank
+    """
     row = df_pool.sample(1).iloc[0]
 
-    correct_answer = row["answer"]
     qid = row["id"]
-    sheet = row["sheet"]
     topic = row["topic"]
-    subject = row["subject"]
     question_text = row["question"]
+    correct = row["answer"]
 
-    # Distractors: start from same sheet/topic pool
-    same_topic = df_pool[df_pool["id"] != qid]
+    # Try to get distractors from same topic
+    same_topic = df_all[(df_all["topic"] == topic) & (df_all["id"] != qid)]
     candidates = same_topic["answer"].dropna().unique().tolist()
-    candidates = [c for c in candidates if c.strip() and c.strip() != correct_answer.strip()]
+    candidates = [c for c in candidates if c.strip() and c.strip() != correct.strip()]
 
-    # Top up from whole bank if needed
-    if len(candidates) < num_options - 1:
-        extra_pool = df_all[df_all["id"] != qid]["answer"].dropna().unique().tolist()
-        extra_pool = [c for c in extra_pool if c.strip() and c.strip() != correct_answer.strip()]
-        random.shuffle(extra_pool)
-        needed = (num_options - 1) - len(candidates)
-        candidates.extend(extra_pool[:needed])
+    # If none, fall back to any other answer in the bank
+    if not candidates:
+        other = df_all[df_all["id"] != qid]["answer"].dropna().unique().tolist()
+        candidates = [c for c in other if c.strip() and c.strip() != correct.strip()]
 
-    random.shuffle(candidates)
-    distractors = candidates[: max(0, num_options - 1)]
+    if not candidates:
+        # Degenerate case: only one question in entire bank
+        distractor = "No distractor available"
+    else:
+        distractor = random.choice(candidates)
 
-    options = [correct_answer] + distractors
+    options = [correct, distractor]
     random.shuffle(options)
 
     return {
         "id": qid,
-        "sheet": sheet,
         "topic": topic,
-        "subject": subject,
         "question": question_text,
-        "correct": correct_answer,
+        "correct": correct,
         "options": options,
     }
 
@@ -125,11 +134,10 @@ if "last_checked_qid" not in ss:
 
 
 def new_question():
-    ss.current_q = make_question(df_pool, df_all, num_options)
+    ss.current_q = make_question(df_pool, df_all)
     ss.last_checked = False
     ss.last_correct = None
     ss.last_checked_qid = None
-    # Reset the radio selection
     if "answer_radio" in ss:
         del ss["answer_radio"]
 
@@ -156,9 +164,10 @@ def record_answer(selected_option: str):
 if ss.current_q is None:
     new_question()
 
+
 # ---------- Main UI ----------
 
-st.title("TX Drill App – Rote Question Practice")
+st.title("TX Drill App – Either/Or Practice")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -173,15 +182,10 @@ st.markdown("---")
 
 q = ss.current_q
 
-# Wrap the interaction in a form so radio clicks alone don't trigger logic
 with st.form("qa_form"):
-    # Meta
-    meta_line = f"**[{q['sheet']}]**"
+    # Meta: topic line
     if q["topic"]:
-        meta_line += f" – {q['topic']}"
-    if q["subject"]:
-        meta_line += f" – {q['subject']}"
-    st.markdown(meta_line)
+        st.markdown(f"**{q['topic']}**")
 
     st.markdown(f"### {q['question']}")
 
@@ -203,8 +207,6 @@ if check:
 
 if next_q:
     new_question()
-    # After new_question() we don't show old feedback, so early-exit draw:
-
 
 # ---------- Feedback ----------
 
@@ -217,11 +219,11 @@ if ss.last_checked and ss.current_q["id"] == ss.last_checked_qid:
     with st.expander("Show correct answer text", expanded=True):
         st.markdown(f"**Correct answer:**  \n{q['correct']}")
 
-    with st.expander("See all options you were choosing between"):
+    with st.expander("See both options you were choosing between"):
         for opt in q["options"]:
             if opt == q["correct"]:
                 st.markdown(f"- **✅ {opt}**")
             else:
                 st.markdown(f"- {opt}")
 else:
-    st.info("Select an option and click **Check answer** to see if you're right.")
+    st.info("Pick one of the two options and click **Check answer**.")
